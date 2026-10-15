@@ -95,6 +95,7 @@ export class AntigravityExtractor implements SessionExtractor {
     let sessionCwd = ""
     let latestTimestamp = ""
     let firstUserPrompt = ""
+    const discoveredCwds = new Set<string>()
     const turns: NormalizedTurn[] = []
 
     for await (const line of rl) {
@@ -104,13 +105,13 @@ export class AntigravityExtractor implements SessionExtractor {
         const ts = step.created_at || new Date().toISOString()
         latestTimestamp = ts
 
-        // Check metadata in initial step
-        if (step.content && typeof step.content === "string") {
+        // Check metadata only in initial step
+        if (step.step_index === 0 && step.content && typeof step.content === "string") {
           const cwdMatch = step.content.match(/Command Working Directory:\s*([^\r\n]+)/)
-          if (cwdMatch) sessionCwd = cwdMatch[1].trim()
+          if (cwdMatch) sessionCwd = cwdMatch[1].trim().replace(/^["']|["']$/g, "")
 
           const wsMatch = step.content.match(/Active Workspaces:\s*\n-\s*([^\r\n]+)/)
-          if (wsMatch && !sessionCwd) sessionCwd = wsMatch[1].trim()
+          if (wsMatch && !sessionCwd) sessionCwd = wsMatch[1].trim().replace(/^["']|["']$/g, "")
         }
 
         // User input
@@ -131,9 +132,14 @@ export class AntigravityExtractor implements SessionExtractor {
           }
         }
 
-        // Assistant response
-        if (step.type === "PLANNER_RESPONSE" || step.source === "MODEL") {
-          const content = String(step.content || "").trim()
+        // Assistant response: only true planner responses, ignore tool outputs
+        if (step.type === "PLANNER_RESPONSE") {
+          let content = String(step.content || "").trim()
+          // Filter out raw tool output strings that happen to appear
+          if (content.startsWith("Created At:") || content.startsWith("Tool is running as a background task")) {
+            content = ""
+          }
+
           const toolCalls: ToolCall[] = []
           const filesModified: string[] = []
 
@@ -142,8 +148,29 @@ export class AntigravityExtractor implements SessionExtractor {
               const toolName = tc.name || "tool"
               const args = tc.args || {}
 
-              if (args.TargetFile || args.AbsolutePath) {
-                filesModified.push(String(args.TargetFile || args.AbsolutePath))
+              // Extract Cwd from run_command or other tools
+              if (args.Cwd) {
+                const cleanedCwd = String(args.Cwd).replace(/^["']|["']$/g, "").trim()
+                if (cleanedCwd) {
+                  discoveredCwds.add(cleanedCwd)
+                  if (!sessionCwd) sessionCwd = cleanedCwd
+                }
+              }
+
+              // Extract directory from TargetFile
+              if (args.TargetFile) {
+                const cleanedTarget = String(args.TargetFile).replace(/^["']|["']$/g, "").trim()
+                const dir = path.dirname(cleanedTarget)
+                if (dir && dir !== ".") discoveredCwds.add(dir)
+              }
+
+              // Only track modified files from tools that actually write or edit
+              const writeTools = new Set(["write_to_file", "replace_file_content", "patch_file", "apply_diff", "edit_file", "create_file"])
+              if (writeTools.has(toolName.toLowerCase())) {
+                const target = args.TargetFile || args.targetFile || args.path || args.file_path
+                if (target) {
+                  filesModified.push(String(target).replace(/^["']|["']$/g, "").trim())
+                }
               }
 
               toolCalls.push({ name: toolName, args })
@@ -165,15 +192,20 @@ export class AntigravityExtractor implements SessionExtractor {
       }
     }
 
-    if (targetCwd && sessionCwd && !pathsEqual(sessionCwd, targetCwd)) {
-      return null
+    // Strict validation when targetCwd is provided
+    if (targetCwd) {
+      const matchesSessionCwd = sessionCwd && pathsEqual(sessionCwd, targetCwd)
+      const matchesAnyDiscovered = Array.from(discoveredCwds).some((d) => pathsEqual(d, targetCwd))
+      if (!matchesSessionCwd && !matchesAnyDiscovered) {
+        return null
+      }
     }
 
     return {
       harness: "antigravity",
       sessionId: convId,
       title: firstUserPrompt.slice(0, 60) || "Antigravity Session",
-      cwd: sessionCwd || targetCwd || "",
+      cwd: targetCwd || sessionCwd || "",
       updatedAt: latestTimestamp || new Date().toISOString(),
       turns,
     }

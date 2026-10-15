@@ -10,7 +10,26 @@ import { MarkdownSynthesizer } from "./synthesizer/markdown.js"
 import { ContextInjector } from "./synthesizer/injector.js"
 import { copyToClipboard } from "./utils/clipboard.js"
 import { ensureGitExcluded } from "./utils/git-exclude.js"
-import type { HarnessType } from "./core/types.js"
+import type { HarnessType, NormalizedSession } from "./core/types.js"
+
+function isSessionIdentifier(arg: string): boolean {
+  const trimmed = arg.trim()
+  if (
+    trimmed.startsWith("codex://") ||
+    trimmed.startsWith("claude://") ||
+    trimmed.startsWith("commandcode://") ||
+    trimmed.startsWith("antigravity://") ||
+    trimmed.startsWith("opencode://") ||
+    trimmed.startsWith("ses_")
+  ) {
+    return true
+  }
+  // Check UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(trimmed)) {
+    return true
+  }
+  return false
+}
 
 const program = new Command()
 
@@ -20,38 +39,75 @@ program
   .version("0.1.0")
 
 program
-  .argument("[threadOrDeeplink]", "Optional thread ID or deeplink (e.g., codex://threads/<id>)")
+  .argument("[threadOrFocus]", "Optional thread ID, deeplink, or description of next session focus")
   .option("-f, --from <harness>", "Explicit source harness (codex, claude, commandcode, antigravity, opencode)")
   .option("-i, --inject", "Inject handoff directly into AGENTS.override.md and CLAUDE.md")
+  .option("--focus <text>", "Explicit description of what the next session will focus on")
+  .option("--out <path>", "Custom output path for the handoff markdown file (defaults to HANDOFF.md in project root)")
   .option("--no-clipboard", "Do not copy kickstart prompt to clipboard")
   .option("--cwd <path>", "Target working directory (defaults to current working directory)")
-  .action(async (threadOrDeeplink, options) => {
+  .action(async (threadOrFocus, options) => {
     p.intro(pc.bgCyan(pc.black(" AI Harness Handoff ")))
 
     const cwd = options.cwd ? path.resolve(options.cwd) : process.cwd()
     const fromHarness = options.from ? (options.from.toLowerCase() as HarnessType) : undefined
 
+    let threadOrDeeplink: string | undefined
+    let focus: string | undefined = options.focus
+
+    if (threadOrFocus) {
+      if (isSessionIdentifier(threadOrFocus)) {
+        threadOrDeeplink = threadOrFocus
+      } else if (!focus) {
+        focus = threadOrFocus
+      }
+    }
+
     const s = p.spinner()
 
     // 1. Session discovery
-    s.start("Scanning local harness stores for active session...")
+    s.start("Scanning local harness stores for active sessions in this repository...")
     const orchestrator = new SessionOrchestrator()
-    const session = await orchestrator.discoverSession({
+    const candidates = await orchestrator.discoverCandidates({
       cwd,
       fromHarness,
       threadOrDeeplink,
     })
 
-    if (!session) {
+    if (candidates.length === 0) {
       s.stop(pc.yellow("No active session found"))
       p.log.warn(
-        `Could not locate a recent session for ${pc.cyan(cwd)}. You can pass a direct deeplink or thread ID as an argument.`
+        `Could not locate a recent session for ${pc.cyan(cwd)}. You can pass a direct deeplink or session ID as an argument.`
       )
       p.outro(pc.gray("Exited without writing handoff."))
       return
     }
 
-    s.stop(`Found session in ${pc.bold(session.harness.toUpperCase())}: ${pc.cyan(session.title || session.sessionId)}`)
+    let session: NormalizedSession
+    if (candidates.length === 1 || Boolean(threadOrDeeplink)) {
+      session = candidates[0]
+      s.stop(
+        `Found session in ${pc.bold(session.harness.toUpperCase())}: ${pc.cyan(session.title || session.sessionId)}`
+      )
+    } else {
+      s.stop(`Found ${candidates.length} candidate sessions for this repository.`)
+      // Prompt user to select
+      const choice = await p.select({
+        message: "Select which session to hand off from:",
+        options: candidates.map((c) => ({
+          value: c,
+          label: `[${c.harness.toUpperCase()}] ${c.title || c.sessionId}`,
+          hint: `Updated ${new Date(c.updatedAt).toLocaleString()}`,
+        })),
+      })
+
+      if (p.isCancel(choice)) {
+        p.cancel("Handoff cancelled.")
+        return
+      }
+
+      session = choice as NormalizedSession
+    }
 
     // 2. Context enrichment
     s.start("Enriching repository state (Git & OpenSpec)...")
@@ -65,15 +121,20 @@ program
     s.stop("Repository and task state enriched.")
 
     // 3. Synthesis & Writing
-    s.start("Synthesizing HANDOFF.md...")
+    s.start("Synthesizing HANDOFF.md with secret redaction and skill suggestions...")
     const synthesizer = new MarkdownSynthesizer()
-    const payload = synthesizer.buildPayload(session, gitCtx, openspecCtx)
+    const payload = synthesizer.buildPayload(session, gitCtx, openspecCtx, focus)
     const markdown = synthesizer.generateMarkdown(payload)
 
-    const handoffPath = path.join(cwd, "HANDOFF.md")
-    fs.writeFileSync(handoffPath, markdown, "utf8")
-    ensureGitExcluded(cwd, "HANDOFF.md")
-    s.stop(`Generated ${pc.green("HANDOFF.md")} (excluded from Git).`)
+    const outputPath = options.out ? path.resolve(options.out) : path.join(cwd, "HANDOFF.md")
+    fs.writeFileSync(outputPath, markdown, "utf8")
+
+    if (!options.out) {
+      ensureGitExcluded(cwd, "HANDOFF.md")
+      s.stop(`Generated ${pc.green("HANDOFF.md")} (auto-excluded in .git/info/exclude).`)
+    } else {
+      s.stop(`Generated ${pc.green(outputPath)}.`)
+    }
 
     // 4. Optional injection
     if (options.inject) {
@@ -94,9 +155,10 @@ program
 
     p.note(
       `Objective: ${pc.bold(payload.objective.slice(0, 80))}\n` +
-      `Git Modified: ${gitCtx.modifiedFiles.length} file(s)\n` +
-      `OpenSpec: ${openspecCtx.summary || "N/A"}\n` +
-      `Next Step: ${payload.nextSteps[0] || "Review HANDOFF.md"}`,
+        `Git Modified: ${gitCtx.modifiedFiles.length} file(s)\n` +
+        `OpenSpec: ${openspecCtx.summary || "N/A"}\n` +
+        `Suggested Skills: ${payload.suggestedSkills?.length || 0} recommended\n` +
+        `Next Step: ${payload.nextSteps[0] || "Review HANDOFF.md"}`,
       "Handoff Summary"
     )
 

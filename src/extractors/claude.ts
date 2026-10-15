@@ -38,9 +38,10 @@ export class ClaudeCodeExtractor implements SessionExtractor {
 
     const expectedSlug = slugifyForClaudeCode(cwd).toLowerCase()
 
-    // Find directory matching slug, or scan all project dirs
+    // Find directory matching slug
     const matchingDirs = projectDirs.filter((d) => path.basename(d).toLowerCase() === expectedSlug)
-    const dirsToScan = matchingDirs.length > 0 ? matchingDirs : projectDirs
+    if (matchingDirs.length === 0) return null
+    const dirsToScan = matchingDirs
 
     const allSessionFiles: string[] = []
     for (const dir of dirsToScan) {

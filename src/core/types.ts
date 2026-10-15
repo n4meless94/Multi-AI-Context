@@ -57,5 +57,6 @@ export interface HandoffPayload {
   lastAction: string
   completedWork: string[]
   nextSteps: string[]
+  suggestedSkills?: string[]
   promptKickstart: string
 }

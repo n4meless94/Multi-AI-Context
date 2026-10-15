@@ -191,7 +191,7 @@ export class CodexExtractor implements SessionExtractor {
       }
     }
 
-    if (targetCwd && sessionCwd && !pathsEqual(sessionCwd, targetCwd)) {
+    if (targetCwd && (!sessionCwd || !pathsEqual(sessionCwd, targetCwd))) {
       return null
     }
 

@@ -43,7 +43,8 @@ export class CommandCodeExtractor implements SessionExtractor {
 
     const expectedSlug = slugifyForCommandCode(cwd).toLowerCase()
     const matchingDirs = projectDirs.filter((d) => path.basename(d).toLowerCase() === expectedSlug)
-    const dirsToScan = matchingDirs.length > 0 ? matchingDirs : projectDirs
+    if (matchingDirs.length === 0) return null
+    const dirsToScan = matchingDirs
 
     const allSessionFiles: string[] = []
     for (const dir of dirsToScan) {

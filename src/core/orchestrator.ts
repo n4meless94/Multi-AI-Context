@@ -45,7 +45,7 @@ export class SessionOrchestrator {
     return { id: trimmed }
   }
 
-  async discoverSession(options: DiscoverOptions = {}): Promise<NormalizedSession | null> {
+  async discoverCandidates(options: DiscoverOptions = {}): Promise<NormalizedSession[]> {
     const cwd = options.cwd || process.cwd()
 
     // 1. Direct ID or deeplink
@@ -55,26 +55,28 @@ export class SessionOrchestrator {
         const ext = this.getExtractor(harness)
         if (ext) {
           const session = await ext.getSessionById(id)
-          if (session) return session
+          if (session) return [session]
         }
       } else {
         // Try all extractors with this ID
         for (const ext of this.extractors) {
           try {
             const session = await ext.getSessionById(id)
-            if (session) return session
+            if (session) return [session]
           } catch {
             // continue
           }
         }
       }
+      return []
     }
 
     // 2. Filtered by harness
     if (options.fromHarness) {
       const ext = this.getExtractor(options.fromHarness)
-      if (!ext) return null
-      return await ext.findLatestSession(cwd)
+      if (!ext) return []
+      const session = await ext.findLatestSession(cwd)
+      return session ? [session] : []
     }
 
     // 3. Multi-harness auto-discovery: query all available extractors
@@ -92,15 +94,17 @@ export class SessionOrchestrator {
       (s): s is NormalizedSession => s !== null
     )
 
-    if (candidates.length === 0) return null
-
-    // Pick the most recently updated session
     candidates.sort((a, b) => {
       const timeA = new Date(a.updatedAt).getTime() || 0
       const timeB = new Date(b.updatedAt).getTime() || 0
       return timeB - timeA
     })
 
-    return candidates[0]
+    return candidates
+  }
+
+  async discoverSession(options: DiscoverOptions = {}): Promise<NormalizedSession | null> {
+    const candidates = await this.discoverCandidates(options)
+    return candidates[0] || null
   }
 }
