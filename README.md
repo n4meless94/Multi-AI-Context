@@ -44,12 +44,15 @@ flowchart TD
 ```
 
 1. **Discovery**: Scans local AI harness directories for sessions matching the project's root path. If multiple active sessions exist, an interactive prompt lets you choose which session to hand off from.
-2. **Extraction**: Parses raw session JSONL logs to synthesize goals, executed commands, files modified/created, decisions made, and errors or limits reached.
+2. **Extraction**: Parses raw session JSONL logs and local SQLite databases (e.g. OpenCode 2.0 `opencode.db`) to extract user intent, executed commands, files modified, decisions made, and errors or limits reached.
 3. **Enrichment**:
    - **Git Status**: Captures current branch, uncommitted modified files, untracked files, and recent commit messages.
    - **OpenSpec**: Captures active changes, task checklists, and specification statuses.
 4. **Synthesis & Output**:
-   - Generates a structured `HANDOFF.md` in the project root.
+   - **Secret Redaction**: Automatically scrubs API keys (`sk-...`, `gho_...`, `Bearer ...`, passwords, auth tokens) before writing.
+   - **Suggested Skills**: Inspects project state and recommends specialized skills for the next assistant (e.g., `openspec-apply-change`, `impeccable`, `gsd-add-tests`, `gsd-code-review`).
+   - **Artifact Referencing Over Duplication**: Avoids dumping massive code walls; references files and specs cleanly by path with concise `git diff --stat`.
+   - Generates a structured `HANDOFF.md` in the project root (or custom `--out <path>`).
    - Adds `HANDOFF.md` to `.git/info/exclude` to guarantee it never accidentally pollutes git commits.
    - Copies a kickoff prompt directly to the OS clipboard:
      ```text
