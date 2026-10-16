@@ -75,6 +75,9 @@ export class SessionOrchestrator {
     if (options.fromHarness) {
       const ext = this.getExtractor(options.fromHarness)
       if (!ext) return []
+      if (typeof ext.findRecentSessions === "function") {
+        return await ext.findRecentSessions(cwd, 5)
+      }
       const session = await ext.findLatestSession(cwd)
       return session ? [session] : []
     }
@@ -83,16 +86,19 @@ export class SessionOrchestrator {
     const candidatePromises = this.extractors.map(async (ext) => {
       try {
         const available = await ext.isAvailable()
-        if (!available) return null
-        return await ext.findLatestSession(cwd)
+        if (!available) return []
+        if (typeof ext.findRecentSessions === "function") {
+          return await ext.findRecentSessions(cwd, 3)
+        }
+        const session = await ext.findLatestSession(cwd)
+        return session ? [session] : []
       } catch {
-        return null
+        return []
       }
     })
 
-    const candidates = (await Promise.all(candidatePromises)).filter(
-      (s): s is NormalizedSession => s !== null
-    )
+    const results = await Promise.all(candidatePromises)
+    const candidates = results.flat()
 
     candidates.sort((a, b) => {
       const timeA = new Date(a.updatedAt).getTime() || 0

@@ -24,9 +24,27 @@ export class OpenCodeExtractor implements SessionExtractor {
   }
 
   async findLatestSession(cwd: string): Promise<NormalizedSession | null> {
+    const recents = await this.findRecentSessions(cwd, 1)
+    return recents[0] || null
+  }
+
+  async findRecentSessions(cwd: string, limit = 5): Promise<NormalizedSession[]> {
     // 1. Try direct SQLite database read if available
-    const dbSession = await this.findSessionFromDb(cwd)
-    if (dbSession) return dbSession
+    const db = await this.getSqliteDatabase()
+    if (db) {
+      try {
+        const sessions = db
+          .prepare("SELECT id, directory, title, time_updated FROM session ORDER BY time_updated DESC")
+          .all() as Array<{ id: string; directory: string; title: string; time_updated: number }>
+
+        const matches = sessions.filter((s) => s.directory && pathsEqual(s.directory, cwd)).slice(0, limit)
+        return matches.map((m) =>
+          this.extractSessionFromDb(db, m.id, m.directory, m.title, m.time_updated)
+        )
+      } catch {
+        // continue
+      }
+    }
 
     // 2. Fallback: Attempt export via opencode2 CLI
     try {
@@ -35,13 +53,14 @@ export class OpenCodeExtractor implements SessionExtractor {
         timeout: 5000,
       })
       if (stdout && stdout.trim()) {
-        return this.parseExportedJson(stdout, cwd)
+        const parsed = this.parseExportedJson(stdout, cwd)
+        return parsed ? [parsed] : []
       }
     } catch {
       // CLI export failed or timed out
     }
 
-    return null
+    return []
   }
 
   async getSessionById(id: string): Promise<NormalizedSession | null> {

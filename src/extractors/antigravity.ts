@@ -42,8 +42,13 @@ export class AntigravityExtractor implements SessionExtractor {
   }
 
   async findLatestSession(cwd: string): Promise<NormalizedSession | null> {
+    const recents = await this.findRecentSessions(cwd, 1)
+    return recents[0] || null
+  }
+
+  async findRecentSessions(cwd: string, limit = 3): Promise<NormalizedSession[]> {
     const transcripts = this.findTranscriptFiles()
-    if (transcripts.length === 0) return null
+    if (transcripts.length === 0) return []
 
     // Sort by mtime descending
     transcripts.sort((a, b) => {
@@ -54,12 +59,16 @@ export class AntigravityExtractor implements SessionExtractor {
       }
     })
 
+    const results: NormalizedSession[] = []
     for (const filePath of transcripts) {
       const session = await this.parseSessionFile(filePath, cwd)
-      if (session) return session
+      if (session) {
+        results.push(session)
+        if (results.length >= limit) break
+      }
     }
 
-    return null
+    return results
   }
 
   async getSessionById(id: string): Promise<NormalizedSession | null> {

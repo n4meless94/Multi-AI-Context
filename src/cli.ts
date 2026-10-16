@@ -84,16 +84,23 @@ program
     }
 
     let session: NormalizedSession
+    const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY)
+
     if (candidates.length === 1 || Boolean(threadOrDeeplink)) {
       session = candidates[0]
       s.stop(
         `Found session in ${pc.bold(session.harness.toUpperCase())}: ${pc.cyan(session.title || session.sessionId)}`
       )
+    } else if (!isInteractive) {
+      session = candidates[0]
+      s.stop(
+        `Found ${candidates.length} active sessions. Defaulted to newest: [${session.harness.toUpperCase()}] ${session.title || session.sessionId}`
+      )
     } else {
-      s.stop(`Found ${candidates.length} candidate sessions for this repository.`)
+      s.stop(`Found ${candidates.length} active sessions for this repository.`)
       // Prompt user to select
       const choice = await p.select({
-        message: "Select which session to hand off from:",
+        message: "Multiple sessions found. Select which session to hand off from:",
         options: candidates.map((c) => ({
           value: c,
           label: `[${c.harness.toUpperCase()}] ${c.title || c.sessionId}`,

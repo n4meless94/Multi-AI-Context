@@ -73,8 +73,13 @@ export class CodexExtractor implements SessionExtractor {
   }
 
   async findLatestSession(cwd: string): Promise<NormalizedSession | null> {
+    const recents = await this.findRecentSessions(cwd, 1)
+    return recents[0] || null
+  }
+
+  async findRecentSessions(cwd: string, limit = 3): Promise<NormalizedSession[]> {
     const sessionFiles = this.findSessionFiles()
-    if (sessionFiles.length === 0) return null
+    if (sessionFiles.length === 0) return []
 
     // Sort by file mtime descending to check newest files first
     sessionFiles.sort((a, b) => {
@@ -86,15 +91,17 @@ export class CodexExtractor implements SessionExtractor {
     })
 
     const indexMap = await this.loadSessionIndex()
+    const results: NormalizedSession[] = []
 
     for (const filePath of sessionFiles) {
       const session = await this.parseSessionFile(filePath, cwd, indexMap)
       if (session) {
-        return session
+        results.push(session)
+        if (results.length >= limit) break
       }
     }
 
-    return null
+    return results
   }
 
   async getSessionById(id: string): Promise<NormalizedSession | null> {

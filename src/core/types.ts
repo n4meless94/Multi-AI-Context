@@ -27,6 +27,7 @@ export interface SessionExtractor {
   name: string
   isAvailable(): Promise<boolean>
   findLatestSession(cwd: string): Promise<NormalizedSession | null>
+  findRecentSessions?(cwd: string, limit?: number): Promise<NormalizedSession[]>
   getSessionById(id: string): Promise<NormalizedSession | null>
 }
 
